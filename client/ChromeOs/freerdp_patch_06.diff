@@ -1,0 +1,1001 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 8b65c73..87540c7 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -725,6 +725,7 @@ if(ANDROID)
+ 	set(OPENSLES_FEATURE_TYPE "REQUIRED")
+ endif()
+ 
++if (NOT CHROMEOS)
+ find_feature(X11 ${X11_FEATURE_TYPE} ${X11_FEATURE_PURPOSE} ${X11_FEATURE_DESCRIPTION})
+ find_feature(Wayland ${WAYLAND_FEATURE_TYPE} ${WAYLAND_FEATURE_PURPOSE} ${WAYLAND_FEATURE_DESCRIPTION})
+ find_feature(DirectFB ${DIRECTFB_FEATURE_TYPE} ${DIRECTFB_FEATURE_PURPOSE} ${DIRECTFB_FEATURE_DESCRIPTION})
+@@ -760,6 +761,7 @@ if(TARGET_ARCH MATCHES "x86|x64")
+ 		find_feature(IPP ${IPP_FEATURE_TYPE} ${IPP_FEATURE_PURPOSE} ${IPP_FEATURE_DESCRIPTION})
+ 	endif()
+ endif()
++endif()
+ 
+ if(OPENSSL_FOUND)
+ 	add_definitions("-DWITH_OPENSSL")
+diff --git a/channels/drive/client/drive_file.h b/channels/drive/client/drive_file.h
+index d287eb4..6860e26 100644
+--- a/channels/drive/client/drive_file.h
++++ b/channels/drive/client/drive_file.h
+@@ -61,7 +61,7 @@
+ typedef UINT32 ssize_t;
+ typedef UINT32 mode_t;
+ 
+-#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__)
++#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) ||  defined (CHROMEOS_BUILD)
+ #define STAT stat
+ #define OPEN open
+ #define LSEEK lseek
+diff --git a/channels/rdpdr/client/rdpdr_main.c b/channels/rdpdr/client/rdpdr_main.c
+index d3c9448..206d9b3 100644
+--- a/channels/rdpdr/client/rdpdr_main.c
++++ b/channels/rdpdr/client/rdpdr_main.c
+@@ -56,6 +56,12 @@
+ #include <unistd.h>
+ #endif
+ 
++ #ifdef CHROMEOS_BUILD
++ #include <sys/time.h>
++ #include <sys/select.h>
++ #endif
++
++
+ #ifdef HAVE_UNISTD_H
+ #include <unistd.h>
+ #endif
+diff --git a/client/common/client.c b/client/common/client.c
+index ac2962a..39b0309 100644
+--- a/client/common/client.c
++++ b/client/common/client.c
+@@ -502,7 +502,8 @@ DWORD client_cli_verify_certificate(freerdp* instance, const char* common_name,
+ 	printf("The above X.509 certificate could not be verified, possibly because you do not have\n"
+ 	       "the CA certificate in your certificate store, or the certificate has expired.\n"
+ 	       "Please look at the documentation on how to create local certificate store for a private CA.\n");
+-	return client_cli_accept_certificate(instance->settings);
++	printf("auto accept temporary\n");
++	return 2; //client_cli_accept_certificate(instance->settings);
+ }
+ 
+ /** Callback set in the rdp_freerdp structure, and used to make a certificate validation
+diff --git a/client/common/cmdline.c b/client/common/cmdline.c
+index 476e445..54165af 100644
+--- a/client/common/cmdline.c
++++ b/client/common/cmdline.c
+@@ -1749,10 +1749,13 @@ int freerdp_client_settings_parse_command_line_arguments(rdpSettings* settings,
+ 		}
+ 		CommandLineSwitchCase(arg, "p")
+ 		{
+-			free(settings->Password);
++			printf("Setting password Entry: %s\n", arg->Value);
++			settings->Password = _strdup(arg->Value);
++			printf("Setting password done: %s\n", arg->Value);
++			// free(settings->Password);
+ 
+-			if (!(settings->Password = _strdup(arg->Value)))
+-				return COMMAND_LINE_ERROR_MEMORY;
++			// if (!(settings->Password = _strdup(arg->Value)))
++			//	return COMMAND_LINE_ERROR_MEMORY;
+ 		}
+ 		CommandLineSwitchCase(arg, "g")
+ 		{
+@@ -2417,8 +2420,10 @@ int freerdp_client_settings_parse_command_line_arguments(rdpSettings* settings,
+ 		{
+ 			settings->AutoReconnectMaxRetries = atoi(arg->Value);
+ 
+-			if ((settings->AutoReconnectMaxRetries < 0) ||
+-				(settings->AutoReconnectMaxRetries > 1000))
++			// if ((settings->AutoReconnectMaxRetries < 0) ||
++			//	(settings->AutoReconnectMaxRetries > 1000))
++                        // cleanup: comparison of unsigned expression < 0 is always false
++                        if (settings->AutoReconnectMaxRetries > 1000)
+ 				return COMMAND_LINE_ERROR;
+ 		}
+ 		CommandLineSwitchCase(arg, "reconnect-cookie")
+diff --git a/libfreerdp/CMakeLists.txt b/libfreerdp/CMakeLists.txt
+index c75511d..94b4a59 100644
+--- a/libfreerdp/CMakeLists.txt
++++ b/libfreerdp/CMakeLists.txt
+@@ -268,7 +268,7 @@ endif()
+ 
+ list(REMOVE_DUPLICATES LIBFREERDP_DEFINITIONS)
+ list(REMOVE_DUPLICATES LIBFREERDP_LIBS)
+-list(REMOVE_DUPLICATES LIBFREERDP_INCLUDES)
++#list(REMOVE_DUPLICATES LIBFREERDP_INCLUDES)
+ include_directories(${LIBFREERDP_INCLUDES})
+ 
+ # On windows create dll version information.
+diff --git a/libfreerdp/codec/bitmap.c b/libfreerdp/codec/bitmap.c
+index b324cea..bd10f16 100644
+--- a/libfreerdp/codec/bitmap.c
++++ b/libfreerdp/codec/bitmap.c
+@@ -459,8 +459,8 @@
+ int freerdp_bitmap_compress(const char* srcData, int width, int height,
+ 		wStream* s, int bpp, int byte_limit, int start_line, wStream* temp_s, int e)
+ {
+-	char *line;
+-	char *last_line;
++	const char *line;
++	const char *last_line;
+ 	char fom_mask[8192]; /* good for up to 64K bitmap */
+ 	int lines_sent;
+ 	int pixel;
+diff --git a/libfreerdp/core/connection.c b/libfreerdp/core/connection.c
+index 74e094e..1f92a63 100644
+--- a/libfreerdp/core/connection.c
++++ b/libfreerdp/core/connection.c
+@@ -178,6 +178,7 @@ BOOL rdp_client_connect(rdpRdp* rdp)
+ 	BOOL status;
+ 	rdpSettings* settings = rdp->settings;
+ 
++	 printf("%s %d Entry \n", __FUNCTION__, __LINE__);
+ 	if (rdp->settingsCopy)
+ 	{
+ 		freerdp_settings_free(rdp->settingsCopy);
+@@ -192,8 +193,10 @@ BOOL rdp_client_connect(rdpRdp* rdp)
+ 	nego_init(rdp->nego);
+ 	nego_set_target(rdp->nego, settings->ServerHostname, settings->ServerPort);
+ 
++	printf("%s %d chkpt1 %s %d \n", __FUNCTION__, __LINE__, settings->ServerHostname, settings->ServerPort);
+ 	if (settings->GatewayEnabled)
+ 	{
++		printf("%s %d chkpt1 settings->GatewayEnabled \n", __FUNCTION__, __LINE__);
+ 		char* user = NULL;
+ 		char* domain = NULL;
+ 		char* cookie = NULL;
+@@ -234,12 +237,14 @@ BOOL rdp_client_connect(rdpRdp* rdp)
+ 	}
+ 	else
+ 	{
++		printf("%s %d chkpt2 settings->GatewayEnabled \n", __FUNCTION__, __LINE__);
+ 		status = nego_set_cookie(rdp->nego, settings->Username);
+ 	}
+ 
+ 	if (!status)
+ 		return FALSE;
+ 
++	printf("%s %d chkpt3 \n", __FUNCTION__, __LINE__);
+ 	nego_set_send_preconnection_pdu(rdp->nego, settings->SendPreconnectionPdu);
+ 	nego_set_preconnection_id(rdp->nego, settings->PreconnectionId);
+ 	nego_set_preconnection_blob(rdp->nego, settings->PreconnectionBlob);
+@@ -255,6 +260,7 @@ BOOL rdp_client_connect(rdpRdp* rdp)
+ 	nego_enable_nla(rdp->nego, settings->NlaSecurity);
+ 	nego_enable_ext(rdp->nego, settings->ExtSecurity);
+ 
++	printf("%s %d chkpt4 \n", __FUNCTION__, __LINE__);
+ 	if (settings->MstscCookieMode)
+ 		settings->CookieMaxLength = MSTSC_COOKIE_MAX_LENGTH;
+ 
+diff --git a/libfreerdp/core/freerdp.c b/libfreerdp/core/freerdp.c
+index 996b5fd..7d774fa 100644
+--- a/libfreerdp/core/freerdp.c
++++ b/libfreerdp/core/freerdp.c
+@@ -153,6 +153,7 @@ BOOL freerdp_connect(freerdp* instance)
+ 	rdpSettings* settings;
+ 	ConnectionResultEventArgs e;
+ 
++	printf("%s %d Entry \n", __FUNCTION__, __LINE__);
+ 	if (!instance)
+ 		return FALSE;
+ 
+@@ -170,6 +171,7 @@ BOOL freerdp_connect(freerdp* instance)
+ 		status2 = freerdp_channels_pre_connect(instance->context->channels,
+ 		                                       instance);
+ 
++	printf("%s %d Entry \n", __FUNCTION__, __LINE__);
+ 	if (settings->KeyboardLayout == KBD_JAPANESE_INPUT_SYSTEM_MS_IME2002)
+ 	{
+ 		settings->KeyboardType = 7;
+@@ -186,6 +188,7 @@ BOOL freerdp_connect(freerdp* instance)
+ 		goto freerdp_connect_finally;
+ 	}
+ 
++	printf("%s %d before rdp_client_connect \n", __FUNCTION__, __LINE__);
+ 	status = rdp_client_connect(rdp);
+ 
+ 	/* --authonly tests the connection without a UI */
+@@ -195,8 +198,10 @@ BOOL freerdp_connect(freerdp* instance)
+ 		goto freerdp_connect_finally;
+ 	}
+ 
+-	if (!status)
++	if (!status) {
++		printf("%s %d going to finally \n", __FUNCTION__, __LINE__);
+ 		goto freerdp_connect_finally;
++	}
+ 
+ 	if (status)
+ 	{
+@@ -611,6 +616,8 @@ BOOL freerdp_context_new(freerdp* instance)
+ 	rdpRdp* rdp;
+ 	rdpContext* context;
+ 	BOOL ret = TRUE;
++
++	printf("%s():%d Entry", __FUNCTION__, __LINE__);
+ 	instance->context = (rdpContext*) calloc(1, instance->ContextSize);
+ 
+ 	if (!instance->context)
+@@ -634,8 +641,12 @@ BOOL freerdp_context_new(freerdp* instance)
+ 
+ 	rdp = rdp_new(context);
+ 
+-	if (!rdp)
++	printf("%s():%d - before rdp", __FUNCTION__, __LINE__);
++	if (!rdp) {
++		printf("%s():%d - rdp failed", __FUNCTION__, __LINE__);
+ 		goto fail;
++	}
++	printf("%s():%d - after rdp", __FUNCTION__, __LINE__);
+ 
+ 	instance->input = rdp->input;
+ 	instance->update = rdp->update;
+diff --git a/libfreerdp/core/nego.c b/libfreerdp/core/nego.c
+index d4b023a..6d6a40b 100644
+--- a/libfreerdp/core/nego.c
++++ b/libfreerdp/core/nego.c
+@@ -74,23 +74,29 @@ BOOL nego_connect(rdpNego* nego)
+ {
+ 	rdpSettings* settings = nego->transport->settings;
+ 
++	printf("%s %d Entry \n", __FUNCTION__, __LINE__);
+ 	if (nego->state == NEGO_STATE_INITIAL)
+ 	{
++		printf("%s %d Initial \n", __FUNCTION__, __LINE__);
+ 		if (nego->EnabledProtocols[PROTOCOL_EXT])
+ 		{
+ 			nego->state = NEGO_STATE_EXT;
++			printf("%s %d Came here \n", __FUNCTION__, __LINE__);
+ 		}
+ 		else if (nego->EnabledProtocols[PROTOCOL_NLA])
+ 		{
+ 			nego->state = NEGO_STATE_NLA;
++			printf("%s %d Came here \n", __FUNCTION__, __LINE__);
+ 		}
+ 		else if (nego->EnabledProtocols[PROTOCOL_TLS])
+ 		{
+ 			nego->state = NEGO_STATE_TLS;
++			printf("%s %d Came here \n", __FUNCTION__, __LINE__);
+ 		}
+ 		else if (nego->EnabledProtocols[PROTOCOL_RDP])
+ 		{
+ 			nego->state = NEGO_STATE_RDP;
++			printf("%s %d Came here \n", __FUNCTION__, __LINE__);
+ 		}
+ 		else
+ 		{
+@@ -102,6 +108,7 @@ BOOL nego_connect(rdpNego* nego)
+ 		if (!nego->NegotiateSecurityLayer)
+ 		{
+ 			WLog_DBG(TAG, "Security Layer Negotiation is disabled");
++			printf("%s %d Came here \n", __FUNCTION__, __LINE__);
+ 			/* attempt only the highest enabled protocol (see nego_attempt_*) */
+ 
+ 			nego->EnabledProtocols[PROTOCOL_NLA] = FALSE;
+@@ -111,22 +118,26 @@ BOOL nego_connect(rdpNego* nego)
+ 
+ 			if (nego->state == NEGO_STATE_EXT)
+ 			{
++				printf("%s %d Came here \n", __FUNCTION__, __LINE__);
+ 				nego->EnabledProtocols[PROTOCOL_EXT] = TRUE;
+ 				nego->EnabledProtocols[PROTOCOL_NLA] = TRUE;
+ 				nego->SelectedProtocol = PROTOCOL_EXT;
+ 			}
+ 			else if (nego->state == NEGO_STATE_NLA)
+ 			{
++				printf("%s %d Came here \n", __FUNCTION__, __LINE__);
+ 				nego->EnabledProtocols[PROTOCOL_NLA] = TRUE;
+ 				nego->SelectedProtocol = PROTOCOL_NLA;
+ 			}
+ 			else if (nego->state == NEGO_STATE_TLS)
+ 			{
++				printf("%s %d Came here \n", __FUNCTION__, __LINE__);
+ 				nego->EnabledProtocols[PROTOCOL_TLS] = TRUE;
+ 				nego->SelectedProtocol = PROTOCOL_TLS;
+ 			}
+ 			else if (nego->state == NEGO_STATE_RDP)
+ 			{
++				printf("%s %d Came here \n", __FUNCTION__, __LINE__);
+ 				nego->EnabledProtocols[PROTOCOL_RDP] = TRUE;
+ 				nego->SelectedProtocol = PROTOCOL_RDP;
+ 			}
+@@ -134,21 +145,27 @@ BOOL nego_connect(rdpNego* nego)
+ 
+ 		if (nego->SendPreconnectionPdu)
+ 		{
++			printf("%s %d Came here \n", __FUNCTION__, __LINE__);
+ 			if (!nego_send_preconnection_pdu(nego))
+ 			{
++				printf("%s %d Came here \n", __FUNCTION__, __LINE__);
+ 				WLog_ERR(TAG, "Failed to send preconnection pdu");
+ 				nego->state = NEGO_STATE_FINAL;
+ 				return FALSE;
++			} else {
++				printf("%s %d Came here \n", __FUNCTION__, __LINE__);
+ 			}
+ 		}
+ 	}
+ 
+ 	if (!nego->NegotiateSecurityLayer)
+ 	{
++		printf("%s %d Came here \n", __FUNCTION__, __LINE__);
+ 		nego->state = NEGO_STATE_FINAL;
+ 	}
+ 	else
+ 	{
++		printf("%s %d Came here \n", __FUNCTION__, __LINE__);
+ 		do
+ 		{
+ 			WLog_DBG(TAG, "state: %s", NEGO_STATE_STRINGS[nego->state]);
+@@ -243,12 +260,16 @@ BOOL nego_security_connect(rdpNego* nego)
+ 
+ BOOL nego_tcp_connect(rdpNego* nego)
+ {
++	printf("%s() %d reached here \n", __FUNCTION__, __LINE__);
+ 	if (!nego->TcpConnected)
+ 	{
++		printf("%s() %d reached here \n", __FUNCTION__, __LINE__);
+ 		if (nego->GatewayEnabled)
+ 		{
++			printf("%s() %d reached here \n", __FUNCTION__, __LINE__);
+ 			if (nego->GatewayBypassLocal)
+ 			{
++				printf("%s() %d reached here \n", __FUNCTION__, __LINE__);
+ 				/* Attempt a direct connection first, and then fallback to using the gateway */
+ 				WLog_INFO(TAG, "Detecting if host can be reached locally. - This might take some time.");
+ 				WLog_INFO(TAG, "To disable auto detection use /gateway-usage-method:direct");
+@@ -258,16 +279,21 @@ BOOL nego_tcp_connect(rdpNego* nego)
+ 
+ 			if (!nego->TcpConnected)
+ 			{
++				printf("%s() %d reached here \n", __FUNCTION__, __LINE__);
+ 				transport_set_gateway_enabled(nego->transport, TRUE);
+ 				nego->TcpConnected = transport_connect(nego->transport, nego->hostname, nego->port, 15);
++				printf("%s() %d reached here %d \n", __FUNCTION__, __LINE__, nego->TcpConnected);
+ 			}
+ 		}
+ 		else
+ 		{
++			printf("%s() %d reached here \n", __FUNCTION__, __LINE__);
+ 			nego->TcpConnected = transport_connect(nego->transport, nego->hostname, nego->port, 15);
++			printf("%s() %d reached here %d \n", __FUNCTION__, __LINE__, nego->TcpConnected);
+ 		}
+ 	}
+ 
++	printf("%s() %d reached here %d \n", __FUNCTION__, __LINE__, nego->TcpConnected);
+ 	return nego->TcpConnected;
+ }
+ 
+@@ -279,11 +305,15 @@ BOOL nego_tcp_connect(rdpNego* nego)
+ 
+ BOOL nego_transport_connect(rdpNego* nego)
+ {
++	printf("%s() %d reached here \n", __FUNCTION__, __LINE__);
+ 	nego_tcp_connect(nego);
+ 
+-	if (nego->TcpConnected && !nego->NegotiateSecurityLayer)
++	if (nego->TcpConnected && !nego->NegotiateSecurityLayer) {
++		printf("%s() %d reached here %d \n", __FUNCTION__, __LINE__, nego->TcpConnected);
+ 		return nego_security_connect(nego);
++	}
+ 
++	printf("%s() %d reached here %d \n", __FUNCTION__, __LINE__, nego->TcpConnected);
+ 	return nego->TcpConnected;
+ }
+ 
+@@ -423,18 +453,21 @@ void nego_attempt_nla(rdpNego* nego)
+ 
+ 	if (!nego_transport_connect(nego))
+ 	{
++		printf("%s %d here \n", __FUNCTION__, __LINE__);
+ 		nego->state = NEGO_STATE_FAIL;
+ 		return;
+ 	}
+ 
+ 	if (!nego_send_negotiation_request(nego))
+ 	{
++		printf("%s %d here \n", __FUNCTION__, __LINE__);
+ 		nego->state = NEGO_STATE_FAIL;
+ 		return;
+ 	}
+ 
+ 	if (!nego_recv_response(nego))
+ 	{
++		printf("%s %d here \n", __FUNCTION__, __LINE__);
+ 		nego->state = NEGO_STATE_FAIL;
+ 		return;
+ 	}
+@@ -443,6 +476,7 @@ void nego_attempt_nla(rdpNego* nego)
+ 
+ 	if (nego->state != NEGO_STATE_FINAL)
+ 	{
++		printf("%s %d here \n", __FUNCTION__, __LINE__);
+ 		nego_transport_disconnect(nego);
+ 
+ 		if (nego->EnabledProtocols[PROTOCOL_TLS])
+diff --git a/libfreerdp/core/settings.c b/libfreerdp/core/settings.c
+index 3eef4e8..4829ec5 100644
+--- a/libfreerdp/core/settings.c
++++ b/libfreerdp/core/settings.c
+@@ -545,10 +545,19 @@ rdpSettings* freerdp_settings_new(DWORD flags)
+ 	if (!settings->ServerMode)
+ 	{
+ 		/* these values are used only by the client part */
++		char strhome[100]="/home/mkumara";
+ 		settings->HomePath = GetKnownPath(KNOWN_PATH_HOME);
++		if (!settings->HomePath) {
++			printf("%s %d Manually copied HomePath\n", __FUNCTION__, __LINE__);
++			settings->HomePath = malloc(101);
++			strncpy(settings->HomePath, strhome, sizeof(strhome));
++		}
++	
+ 
+-		if (!settings->HomePath)
++		if (!settings->HomePath) {
++			printf("%s %d error accessing HomePath\n", __FUNCTION__, __LINE__);
+ 			goto out_fail;
++		}
+ 
+ 		/* For default FreeRDP continue using same config directory
+ 		 * as in old releases.
+diff --git a/libfreerdp/core/tcp.c b/libfreerdp/core/tcp.c
+index f5aa3d7..dbbbfca 100644
+--- a/libfreerdp/core/tcp.c
++++ b/libfreerdp/core/tcp.c
+@@ -1045,6 +1045,7 @@ int freerdp_tcp_connect(rdpContext* context, rdpSettings* settings,
+ 	BOOL ipcSocket = FALSE;
+ 	BOOL useExternalDefinedSocket = FALSE;
+ 
++	printf("%s() %d reached here \n", __FUNCTION__, __LINE__);
+ 	if (!hostname)
+ 		return -1;
+ 
+@@ -1056,6 +1057,7 @@ int freerdp_tcp_connect(rdpContext* context, rdpSettings* settings,
+ 
+ 	if (ipcSocket)
+ 	{
++		printf("%s() %d reached here \n", __FUNCTION__, __LINE__);
+ 		sockfd = freerdp_uds_connect(hostname);
+ 
+ 		if (sockfd < 0)
+@@ -1065,20 +1067,25 @@ int freerdp_tcp_connect(rdpContext* context, rdpSettings* settings,
+ 		sockfd = port;
+ 	else
+ 	{
++		printf("%s() %d reached here \n", __FUNCTION__, __LINE__);
+ 		sockfd = -1;
+ 
+ 		if (!settings->GatewayEnabled)
+ 		{
++			printf("%s() %d reached here \n", __FUNCTION__, __LINE__);
+ 			if (!freerdp_tcp_resolve_hostname(context, hostname) || settings->RemoteAssistanceMode)
+ 			{
++				printf("%s() %d reached here \n", __FUNCTION__, __LINE__);
+ 				if (settings->TargetNetAddressCount > 0)
+ 				{
++					printf("%s() %d reached here \n", __FUNCTION__, __LINE__);
+ 					sockfd = freerdp_tcp_connect_multi(
+ 					             context,
+ 					             settings->TargetNetAddresses,
+ 					             settings->TargetNetPorts,
+ 					             settings->TargetNetAddressCount,
+ 					             port, timeout);
++					printf("%s() %d %d reached here \n", __FUNCTION__, __LINE__, sockfd);
+ 				}
+ 			}
+ 		}
+@@ -1095,6 +1102,7 @@ int freerdp_tcp_connect(rdpContext* context, rdpSettings* settings,
+ 			sprintf_s(port_str, sizeof(port_str) - 1, "%d", port);
+ 			status = getaddrinfo(hostname, port_str, &hints, &result);
+ 
++			printf("%s() %d reached here \n", __FUNCTION__, __LINE__);
+ 			if (status)
+ 			{
+ 				if (!freerdp_get_last_error(context))
+@@ -1119,9 +1127,10 @@ int freerdp_tcp_connect(rdpContext* context, rdpSettings* settings,
+ 			}
+ 
+ 			sockfd = socket(addr->ai_family, addr->ai_socktype, addr->ai_protocol);
+-
++			printf("%s() %d %d reached here \n", __FUNCTION__, __LINE__, sockfd);
+ 			if (sockfd < 0)
+ 			{
++				printf("%s() %d %d reached here \n", __FUNCTION__, __LINE__, sockfd);
+ 				freeaddrinfo(result);
+ 				return -1;
+ 			}
+@@ -1129,6 +1138,7 @@ int freerdp_tcp_connect(rdpContext* context, rdpSettings* settings,
+ 			if (!freerdp_tcp_connect_timeout(context, sockfd, addr->ai_addr,
+ 			                                 addr->ai_addrlen, timeout))
+ 			{
++				printf("%s() %d %d reached here \n", __FUNCTION__, __LINE__, sockfd);
+ 				freeaddrinfo(result);
+ 				close(sockfd);
+ 				WLog_ERR(TAG, "failed to connect to %s", hostname);
+@@ -1139,6 +1149,7 @@ int freerdp_tcp_connect(rdpContext* context, rdpSettings* settings,
+ 		}
+ 	}
+ 
++	printf("%s() %d reached here \n", __FUNCTION__, __LINE__);
+ 	settings->IPv6Enabled = FALSE;
+ 	free(settings->ClientAddress);
+ 	settings->ClientAddress = freerdp_tcp_get_ip_address(sockfd);
+@@ -1160,6 +1171,7 @@ int freerdp_tcp_connect(rdpContext* context, rdpSettings* settings,
+ 		if (setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, (void*) &optval, optlen) < 0)
+ 			WLog_ERR(TAG, "unable to set TCP_NODELAY");
+ 	}
++	printf("%s() %d reached here \n", __FUNCTION__, __LINE__);
+ 
+ 	/* receive buffer must be a least 32 K */
+ 	if (getsockopt(sockfd, SOL_SOCKET, SO_RCVBUF, (void*) &optval, &optlen) == 0)
+@@ -1178,6 +1190,7 @@ int freerdp_tcp_connect(rdpContext* context, rdpSettings* settings,
+ 		}
+ 	}
+ 
++	printf("%s() %d reached here \n", __FUNCTION__, __LINE__);
+ 	if (!ipcSocket && !useExternalDefinedSocket)
+ 	{
+ 		if (!freerdp_tcp_set_keep_alive_mode(sockfd))
+@@ -1194,5 +1207,6 @@ int freerdp_tcp_connect(rdpContext* context, rdpSettings* settings,
+ 		return -1;
+ 	}
+ 
++	printf("%s() %d reached here \n", __FUNCTION__, __LINE__);
+ 	return sockfd;
+ }
+diff --git a/libfreerdp/core/transport.c b/libfreerdp/core/transport.c
+index 9cc46f8..3636aa3 100644
+--- a/libfreerdp/core/transport.c
++++ b/libfreerdp/core/transport.c
+@@ -223,8 +223,11 @@ BOOL transport_connect(rdpTransport* transport, const char* hostname,
+ 	rdpContext* context = transport->context;
+ 	transport->async = settings->AsyncTransport;
+ 
++	printf("%s() %d reached here \n", __FUNCTION__, __LINE__);
++
+ 	if (transport->GatewayEnabled)
+ 	{
++		printf("%s() %d reached here \n", __FUNCTION__, __LINE__);
+ 		if (!status && settings->GatewayHttpTransport)
+ 		{
+ 			transport->rdg = rdg_new(transport);
+@@ -272,10 +275,13 @@ BOOL transport_connect(rdpTransport* transport, const char* hostname,
+ 	}
+ 	else
+ 	{
++		printf("%s() %d reached here \n", __FUNCTION__, __LINE__);
+ 		sockfd = freerdp_tcp_connect(context, settings, hostname, port, timeout);
+ 
+-		if (sockfd < 1)
++		if (sockfd < 1) {
++			printf("%s() %d reached here %d\n", __FUNCTION__, __LINE__, sockfd);
+ 			return FALSE;
++		}
+ 
+ 		if (!transport_attach(transport, sockfd))
+ 			return FALSE;
+@@ -285,6 +291,7 @@ BOOL transport_connect(rdpTransport* transport, const char* hostname,
+ 
+ 	if (status)
+ 	{
++		printf("%s() %d reached here \n", __FUNCTION__, __LINE__);
+ 		if (transport->async)
+ 		{
+ 			if (!(transport->stopEvent = CreateEvent(NULL, TRUE, FALSE, NULL)))
+diff --git a/libfreerdp/utils/passphrase.c b/libfreerdp/utils/passphrase.c
+index ab6e3e7..9cf06c5 100644
+--- a/libfreerdp/utils/passphrase.c
++++ b/libfreerdp/utils/passphrase.c
+@@ -32,7 +32,7 @@ char* freerdp_passphrase_read(const char* prompt, char* buf, size_t bufsiz, int
+ 	return NULL;
+ }
+ 
+-#elif !defined(ANDROID)
++#elif !defined(ANDROID) && !defined(CHROMEOS_BUILD)
+ 
+ #include <fcntl.h>
+ #include <stdio.h>
+diff --git a/winpr/CMakeLists.txt b/winpr/CMakeLists.txt
+index a14d596..1525bfd 100644
+--- a/winpr/CMakeLists.txt
++++ b/winpr/CMakeLists.txt
+@@ -168,7 +168,7 @@ add_subdirectory(include)
+ 
+ add_subdirectory(libwinpr)
+ 
+-if(NOT ANDROID AND NOT IOS AND NOT UWP)
++if(NOT ANDROID AND NOT IOS AND NOT UWP AND NOT CHROMEOS)
+ 	add_subdirectory(tools)
+ endif()
+ 
+diff --git a/winpr/include/winpr/winsock.h b/winpr/include/winpr/winsock.h
+index 5e04418..9696885 100644
+--- a/winpr/include/winpr/winsock.h
++++ b/winpr/include/winpr/winsock.h
+@@ -24,6 +24,28 @@
+ #include <winpr/wtypes.h>
+ #include <winpr/windows.h>
+ 
++#ifdef CHROMEOS_BUILD
++#define SIOCGIFCONF     0x8912          /* get iface list               */
++#define SIOCSIFFLAGS    0x8914          /* set flags                    */
++#define SIOCSIFADDR     0x8916          /* set PA address               */
++#define SIOCGIFBRDADDR  0x8919          /* get broadcast PA address     */
++#define SIOCGIFNETMASK  0x891b          /* get network PA mask          */
++#define SIOCSIFNETMASK  0x891c          /* set network PA mask          */
++
++#define SIOCGIFCONF        0x8912                /* get iface list                */
++#define SIOCGIFFLAGS        0x8913                /* get flags                        */
++#define SIOCGIFDSTADDR        0x8917                /* get remote PA address        */
++#define SIOCGIFBRDADDR        0x8919                /* get broadcast PA address        */
++#define SIOCGIFNETMASK        0x891b                /* get network PA mask                */
++
++#define FIONBIO 2
++#define SIOCGIFADDR 4
++
++#include <sys/select.h>
++
++#endif
++
++
+ #ifdef _WIN32
+ 
+ #define _accept			accept
+@@ -268,7 +290,7 @@ typedef UINT32 GROUP;
+ #define SG_UNCONSTRAINED_GROUP		0x01
+ #define SG_CONSTRAINED_GROUP		0x02
+ 
+-#define SIO_GET_INTERFACE_LIST		_IOR('t', 127, ULONG)
++#define SIO_GET_INTERFACE_LIST		127 // _IOR('t', 127, ULONG)
+ #define SIO_GET_INTERFACE_LIST_EX	_IOR('t', 126, ULONG)
+ #define SIO_SET_MULTICAST_FILTER	_IOW('t', 125, ULONG)
+ #define SIO_GET_MULTICAST_FILTER	_IOW('t', 124 | IOC_IN, ULONG)
+diff --git a/winpr/include/winpr/wlog.h b/winpr/include/winpr/wlog.h
+index c8ad36e..2546945 100644
+--- a/winpr/include/winpr/wlog.h
++++ b/winpr/include/winpr/wlog.h
+@@ -110,6 +110,7 @@ WINPR_API BOOL WLog_PrintMessageVA(wLog* log, DWORD type, DWORD level,
+                                    DWORD line,
+                                    const char* file, const char* function, va_list args);
+ 
++#if 0
+ #define WLog_Print(_log, _log_level, ...) \
+ 	do { \
+ 		if (_log && _log_level >= WLog_GetLogLevel(_log)) { \
+@@ -149,6 +150,48 @@ WINPR_API BOOL WLog_PrintMessageVA(wLog* log, DWORD type, DWORD level,
+ 			                  __LINE__, __FILE__, __FUNCTION__, __VA_ARGS__ ); \
+ 		} \
+ 	} while (0)
++#else
++
++#define WLog_Print(_log, _log_level, ...) \
++	do { \
++		if (1) { \
++			WLog_PrintMessage(_log, WLOG_MESSAGE_TEXT, _log_level, \
++			                  __LINE__, __FILE__, __FUNCTION__, __VA_ARGS__ ); \
++		} \
++	} while (0)
++
++#define WLog_PrintVA(_log, _log_level, _args) \
++	do { \
++		if (1) { \
++			WLog_PrintMessageVA(_log, WLOG_MESSAGE_TEXT, _log_level, \
++			                    __LINE__, __FILE__, __FUNCTION__, _args ); \
++		} \
++	} while (0)
++
++#define WLog_Data(_log, _log_level, ...) \
++	do { \
++		if (1) { \
++			WLog_PrintMessage(_log, WLOG_MESSAGE_DATA, _log_level, \
++			                  __LINE__, __FILE__, __FUNCTION__, __VA_ARGS__ ); \
++		} \
++	} while (0)
++
++#define WLog_Image(_log, _log_level, ...) \
++	do { \
++		if (1) { \
++			WLog_PrintMessage(_log, WLOG_MESSAGE_DATA, _log_level, \
++			                  __LINE__, __FILE__, __FUNCTION__, __VA_ARGS__ ); \
++		} \
++	} while (0)
++
++#define WLog_Packet(_log, _log_level, ...) \
++	do { \
++		if (1) { \
++			WLog_PrintMessage(_log, WLOG_MESSAGE_PACKET, _log_level, \
++			                  __LINE__, __FILE__, __FUNCTION__, __VA_ARGS__ ); \
++		} \
++	} while (0)
++#endif
+ 
+ #define WLog_LVL(tag, lvl, ...) WLog_Print(WLog_Get(tag), lvl, __VA_ARGS__)
+ #define WLog_VRB(tag, ...) WLog_Print(WLog_Get(tag), WLOG_TRACE, __VA_ARGS__)
+diff --git a/winpr/libwinpr/crt/string.c b/winpr/libwinpr/crt/string.c
+index b7d36d9..f62c33f 100644
+--- a/winpr/libwinpr/crt/string.c
++++ b/winpr/libwinpr/crt/string.c
+@@ -545,7 +545,7 @@ INT64 GetLine(char** lineptr, size_t* size, FILE* stream)
+     (*lineptr)[used] = '\0';
+ 
+ 	return used;
+-#elif !defined(ANDROID) && !defined(IOS)
++#elif !defined(ANDROID) && !defined(IOS) && !defined(CHROMEOS_BUILD)
+ 	return getline(lineptr, size, stream);
+ #else
+ 	return -1;
+diff --git a/winpr/libwinpr/file/file.c b/winpr/libwinpr/file/file.c
+index 335c9c4..0082e71 100644
+--- a/winpr/libwinpr/file/file.c
++++ b/winpr/libwinpr/file/file.c
+@@ -44,6 +44,26 @@
+ #include <sys/stat.h>
+ #include <sys/time.h>
+ 
++#ifdef CHROMEOS_BUILD
++ # define LOCK_SH        1       /* shared lock */
++ # define LOCK_EX        2       /* exclusive lock */
++ # define LOCK_NB        4       /* or'd with one of the above to prevent
++                                    blocking */
++ # define LOCK_UN        8       /* remove lock */
++
++// please refer to https://chromium.googlesource.com/native_client/nacl-glibc/+/ng/2.22/master/io/flock.c
++// If required, we may need to implement PPAPI FileIO or similar equivalent
++int
++flock (fd, operation)
++     int fd;
++     int operation;
++{
++	WLog_ERR(TAG, "%s is not implemented", __FUNCTION__);
++	return -1;
++}
++
++#endif
++
+ static BOOL FileIsHandled(HANDLE handle)
+ {
+ 	WINPR_FILE* pFile = (WINPR_FILE*) handle;
+@@ -357,7 +377,7 @@ static BOOL FileSetFileTime(HANDLE hFile, const FILETIME *lpCreationTime,
+ 		const FILETIME *lpLastAccessTime, const FILETIME *lpLastWriteTime)
+ {
+ 	int rc;
+-#if defined(__APPLE__) || defined(ANDROID) || defined(__FreeBSD__)
++#if defined(__APPLE__) || defined(ANDROID) || defined(__FreeBSD__) || defined (CHROMEOS_BUILD)
+ 	struct stat buf;
+ 	/* OpenBSD, NetBSD and DragonflyBSD support POSIX futimens */
+ 	struct timeval timevals[2];
+@@ -384,7 +404,7 @@ static BOOL FileSetFileTime(HANDLE hFile, const FILETIME *lpCreationTime,
+ #else
+ 		TIMESPEC_TO_TIMEVAL(&timevals[0], &buf.st_atimespec);
+ #endif
+-#elif defined(ANDROID)
++#elif defined(ANDROID)|| defined(CHROMEOS_BUILD)
+ 		timevals[0].tv_sec = buf.st_atime;
+ 		timevals[0].tv_usec = buf.st_atimensec / 1000UL;
+ #else
+@@ -399,7 +419,7 @@ static BOOL FileSetFileTime(HANDLE hFile, const FILETIME *lpCreationTime,
+ 		tmp -= EPOCH_DIFF;
+ 		tmp /= 10ULL;
+ 
+-#if defined(ANDROID) || defined(__FreeBSD__) || defined(__APPLE__)
++#if defined(ANDROID) || defined(__FreeBSD__) || defined(__APPLE__) || defined(CHROMEOS_BUILD)
+ 		tmp /= 10000ULL;
+ 
+ 		timevals[0].tv_sec = tmp / 10000ULL;
+@@ -418,7 +438,7 @@ static BOOL FileSetFileTime(HANDLE hFile, const FILETIME *lpCreationTime,
+ #else
+ 		TIMESPEC_TO_TIMEVAL(&timevals[1], &buf.st_mtimespec);
+ #endif
+-#elif defined(ANDROID)
++#elif defined(ANDROID) || defined(CHROMEOS_BUILD)
+ 		timevals[1].tv_sec = buf.st_mtime;
+ 		timevals[1].tv_usec = buf.st_mtimensec / 1000UL;
+ #else
+@@ -433,7 +453,7 @@ static BOOL FileSetFileTime(HANDLE hFile, const FILETIME *lpCreationTime,
+ 		tmp -= EPOCH_DIFF;
+ 		tmp /= 10ULL;
+ 
+-#if defined(ANDROID) || defined(__FreeBSD__) || defined(__APPLE__)
++#if defined(ANDROID) || defined(__FreeBSD__) || defined(__APPLE__) || defined(CHROMEOS_BUILD)
+ 		tmp /= 10000ULL;
+ 
+ 		timevals[1].tv_sec = tmp / 10000ULL;
+@@ -445,7 +465,7 @@ static BOOL FileSetFileTime(HANDLE hFile, const FILETIME *lpCreationTime,
+ 	}
+ 
+ 	// TODO: Creation time can not be handled!
+-#if defined(ANDROID) || defined(__FreeBSD__) || defined(__APPLE__)
++#if defined(ANDROID) || defined(__FreeBSD__) || defined(__APPLE__) || defined(CHROMEOS_BUILD)
+ 	rc = utimes(pFile->lpFileName, timevals);
+ #else
+ 	rc = futimens(fileno(pFile->fp), times);
+diff --git a/winpr/libwinpr/io/device.c b/winpr/libwinpr/io/device.c
+index 0e13092..5f13cf5 100644
+--- a/winpr/libwinpr/io/device.c
++++ b/winpr/libwinpr/io/device.c
+@@ -124,6 +124,16 @@ char* GetDeviceFileUnixDomainSocketFilePathA(LPCSTR lpName)
+  * http://msdn.microsoft.com/en-us/library/windows/hardware/ff548397/
+  */
+ 
++#ifdef CHROMEOS_BUILD
++/* 
++ * We could see references to mkfifo only in libnacl.a library, but not explicitly declared.
++ * Hence declaring this function as extern to avoid compiler warning */
++
++/* Create a new FIFO named PATH, with permission bits MODE.  */
++extern int mkfifo (const char *__path, __mode_t __mode)
++     __THROW __nonnull ((1));
++#endif
++
+ NTSTATUS _IoCreateDeviceEx(PDRIVER_OBJECT_EX DriverObject, ULONG DeviceExtensionSize, PUNICODE_STRING DeviceName,
+ 		DEVICE_TYPE DeviceType, ULONG DeviceCharacteristics, BOOLEAN Exclusive, PDEVICE_OBJECT_EX* DeviceObject)
+ {
+diff --git a/winpr/libwinpr/library/library.c b/winpr/libwinpr/library/library.c
+index c27d256..9a7f9ba 100644
+--- a/winpr/libwinpr/library/library.c
++++ b/winpr/libwinpr/library/library.c
+@@ -67,8 +67,14 @@
+ #if !defined(_WIN32) || defined(_UWP)
+ 
+ #ifndef _WIN32
+-
++#ifndef CHROMEOS_BUILD
++/*
++ * please refer to https://developer.chrome.com/native-client/devguide/devcycle/dynamic-loading
++ * PNacl supports only static libraries, hence we have switched all the libraries as static and
++ * mark the dynamic linking as not implemented
++ */
+ #include <dlfcn.h>
++#endif
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <unistd.h>
+@@ -116,6 +122,8 @@ HMODULE LoadLibraryA(LPCSTR lpLibFileName)
+ 	free(filenameW);
+ 
+ 	return hModule;
++#elif defined (CHROMEOS_BUILD)
++        return NULL;
+ #else
+ 	HMODULE library;
+ 
+@@ -142,7 +150,7 @@ HMODULE LoadLibraryW(LPCWSTR lpLibFileName)
+ 
+ HMODULE LoadLibraryExA(LPCSTR lpLibFileName, HANDLE hFile, DWORD dwFlags)
+ {
+-#if !defined(_UWP)
++#if !defined(_UWP) && !defined(CHROMEOS_BUILD)
+ 	HMODULE library;
+ 
+ 	library = dlopen(lpLibFileName, RTLD_LOCAL | RTLD_LAZY);
+@@ -171,13 +179,18 @@ HMODULE LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags)
+ FARPROC GetProcAddress(HMODULE hModule, LPCSTR lpProcName)
+ {
+ 	FARPROC proc;
++#ifdef CHROMEOS_BUILD
++	WLog_ERR(TAG, "%s is not implemented", __FUNCTION__);
++	SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
++	proc = NULL;
++#else
+ 	proc = dlsym(hModule, lpProcName);
+-
+ 	if (proc == NULL)
+ 	{
+ 		WLog_ERR(TAG, "GetProcAddress: could not find procedure %s: %s", lpProcName, dlerror());
+ 		return (FARPROC) NULL;
+ 	}
++#endif
+ 
+ 	return proc;
+ }
+@@ -185,7 +198,14 @@ FARPROC GetProcAddress(HMODULE hModule, LPCSTR lpProcName)
+ BOOL FreeLibrary(HMODULE hLibModule)
+ {
+ 	int status;
++
++#ifdef CHROMEOS_BUILD
++	WLog_ERR(TAG, "%s is not implemented", __FUNCTION__);
++	SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
++	status = -1;
++#else
+ 	status = dlclose(hLibModule);
++#endif
+ 
+ 	if (status != 0)
+ 		return FALSE;
+diff --git a/winpr/libwinpr/shell/shell.c b/winpr/libwinpr/shell/shell.c
+index bcbf5b0..74d283d 100644
+--- a/winpr/libwinpr/shell/shell.c
++++ b/winpr/libwinpr/shell/shell.c
+@@ -45,6 +45,11 @@
+ 
+ #include "../security/security.h"
+ 
++#ifdef CHROMEOS_BUILD
++#define _SC_GETPW_R_SIZE_MAX 1024
++#endif
++
++
+ BOOL GetUserProfileDirectoryA(HANDLE hToken, LPSTR lpProfileDir, LPDWORD lpcchSize)
+ {
+ 	char* buf;
+diff --git a/winpr/libwinpr/synch/timer.c b/winpr/libwinpr/synch/timer.c
+index 3ed9b58..788379b 100644
+--- a/winpr/libwinpr/synch/timer.c
++++ b/winpr/libwinpr/synch/timer.c
+@@ -603,9 +603,11 @@ int StartTimerQueueThread(WINPR_TIMER_QUEUE* timerQueue)
+ 	pthread_mutex_init(&(timerQueue->cond_mutex), NULL);
+ 	pthread_mutex_init(&(timerQueue->mutex), NULL);
+ 	pthread_attr_init(&(timerQueue->attr));
++#ifndef CHROMEOS_BUILD
+ 	timerQueue->param.sched_priority = sched_get_priority_max(SCHED_FIFO);
+ 	pthread_attr_setschedparam(&(timerQueue->attr), &(timerQueue->param));
+ 	pthread_attr_setschedpolicy(&(timerQueue->attr), SCHED_FIFO);
++#endif
+ 	pthread_create(&(timerQueue->thread), &(timerQueue->attr), TimerQueueThread, timerQueue);
+ 	return 0;
+ }
+diff --git a/winpr/libwinpr/thread/process.c b/winpr/libwinpr/thread/process.c
+index 2c179c7..266d341 100644
+--- a/winpr/libwinpr/thread/process.c
++++ b/winpr/libwinpr/thread/process.c
+@@ -73,6 +73,10 @@
+ #endif
+ #endif
+ 
++#ifdef CHROMEOS_BUILD
++#define _SC_OPEN_MAX 1024
++#endif
++
+ /**
+  * If the file name does not contain a directory path, the system searches for the executable file in the following sequence:
+  *
+diff --git a/winpr/libwinpr/thread/thread.c b/winpr/libwinpr/thread/thread.c
+index 7e3d724..681f9c7 100644
+--- a/winpr/libwinpr/thread/thread.c
++++ b/winpr/libwinpr/thread/thread.c
+@@ -744,7 +744,7 @@ BOOL TerminateThread(HANDLE hThread, DWORD dwExitCode)
+ 	if (pthread_mutex_lock(&thread->mutex))
+ 		return FALSE;
+ 
+-#ifndef ANDROID
++#if !defined(ANDROID) && !defined(CHROMEOS_BUILD)
+ 	pthread_cancel(thread->thread);
+ #else
+ 	WLog_ERR(TAG, "Function not supported on this platform!");
+diff --git a/winpr/libwinpr/winsock/winsock.c b/winpr/libwinpr/winsock/winsock.c
+index cd2b68b..023dd22 100644
+--- a/winpr/libwinpr/winsock/winsock.c
++++ b/winpr/libwinpr/winsock/winsock.c
+@@ -923,7 +923,7 @@ int WSAIoctl(SOCKET s, DWORD dwIoControlCode, LPVOID lpvInBuffer,
+ 
+ next_ifreq:
+ 
+-#if !defined(__linux__) && !defined(__sun__)
++#if !defined(__linux__) && !defined(__sun__)&& !defined(CHROMEOS_BUILD)
+ 		ifreq_len = IFNAMSIZ + ifreq->ifr_addr.sa_len;
+ #else
+ 		ifreq_len = sizeof(*ifreq);
+@@ -1248,7 +1248,8 @@ struct protoent* _getprotobynumber(int number)
+ {
+ 	struct protoent* proto;
+ 
+-	proto = getprotobynumber(number);
++	 printf("************%s %d _getprotobynumber stubbed ********\n", __FUNCTION__, __LINE__);
++	// proto = getprotobynumber(number);
+ 
+ 	return proto;
+ }
+@@ -1257,7 +1258,8 @@ struct protoent* _getprotobyname(const char* name)
+ {
+ 	struct protoent* proto;
+ 
+-	proto = getprotobyname(name);
++	 printf("************%s %d _getprotobyname stubbed ********\n", __FUNCTION__, __LINE__);
++	// proto = getprotobyname(name);
+ 
+ 	return proto;
+ }
